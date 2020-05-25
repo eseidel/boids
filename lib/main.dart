@@ -3,14 +3,16 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'dart:math';
 
-const double kBoidVelocity = 2.0;
+const double kBoidVelocity = 5.0;
 const double kBoidScale = 2.0;
-const int kBoidCount = 10;
-const double kBoidSteerSpeed = .1;
+const int kBoidCount = 100;
+const double kBoidMaxSteerSpeed = .1;
 // Governs how much the boids spread out at the start.
 const double kInitialWorldSize = 1000;
-const double kBoidSenseRadius = 100;
+const double kBoidSenseRadius = 200;
 const double kBoidSenseAngle = .75 * pi;
+
+const bool kEnableSeparation = true;
 
 void main() {
   runApp(MyApp());
@@ -137,26 +139,37 @@ class Boid extends Mob {
     position += velocityVector;
   }
 
+  double normalizeWithinPiToNegativePi(double radians) =>
+      ((radians + pi) % (2 * pi) - pi);
+
   @override
   void plan(World world) {
     nextSteeringChange = 0;
     nearbyMobs = <Offset>[];
     // Separation
-    if (showSight) {
+    if (kEnableSeparation) {
+      // Instead of looping and summing, we could just steer away from the closest?
       for (Mob other in world.mobs) {
         if (other == this) continue;
         Offset offsetToOther = other.position - position;
         if (offsetToOther.distance > kBoidSenseRadius) continue;
         double relativeAngleToOther =
             offsetToOther.direction - velocityVector.direction;
-        // print(relativeAngleToOther);
+        relativeAngleToOther =
+            normalizeWithinPiToNegativePi(relativeAngleToOther);
+        // Ignore mobs outside our sense angle.
+        if (relativeAngleToOther.abs() > kBoidSenseAngle) continue;
         Offset relativeVector =
             Offset.fromDirection(relativeAngleToOther, offsetToOther.distance);
         nearbyMobs.add(relativeVector);
-        // TODO: This is wrong, needs normalization into -pi to +pi first.
-        nextSteeringChange += (relativeVector.direction.sign < 0
-            ? kBoidSteerSpeed
-            : kBoidSteerSpeed);
+
+        // Steer away from the angle of the relative vector.
+        // TODO: This is current linear, quadratic might look better.
+        double angleAdjust =
+            -relativeVector.direction.sign * kBoidMaxSteerSpeed;
+        // At speed relative to how close the mob is.
+        angleAdjust *= (1 - relativeVector.distance / kBoidSenseRadius);
+        nextSteeringChange += angleAdjust;
       }
     }
     // Alignment
@@ -180,12 +193,9 @@ class Boid extends Mob {
       canvas.drawArc(
           arcRect, -kBoidSenseAngle, 2 * kBoidSenseAngle, true, circlePaint);
 
-      if (nearbyMobs.length > 1) {
-        print(nearbyMobs);
-      }
       for (Offset otherOffset in nearbyMobs) {
         Paint obstaclePaint = Paint()
-          ..color = (otherOffset.direction > 0
+          ..color = (normalizeWithinPiToNegativePi(otherOffset.direction) > 0
               ? Colors.red.withAlpha(150)
               : Colors.blue.withAlpha(150))
           ..strokeWidth = 3.0
