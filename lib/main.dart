@@ -8,15 +8,16 @@ const double kBoidScale = 2.0;
 const int kBoidCount = 100;
 const double kBoidMaxAvoidSteerSpeed = .1;
 // Angles above maxAlignAngle are treeted the same (caps the turn speed).
-const double kBoidMaxAlignAngle = pi / 10;
-const double kBoidMaxAlignSteerSpeed = pi / 100;
+const double kBoidMaxAlignAngle = pi / 10.0;
+const double kBoidMaxAlignSteerSpeed = pi / 100.0;
 // Governs how much the boids spread out at the start.
 const double kInitialWorldSize = 1000;
-const double kBoidSenseRadius = 200;
+const double kBoidSenseRadius = 100;
 const double kBoidSenseAngle = .75 * pi;
 
 const bool kEnableSeparation = true;
 const bool kEnableAlignment = true;
+const bool kEnableCohesion = true;
 
 void main() {
   runApp(MyApp());
@@ -149,6 +150,7 @@ class Boid extends Mob {
   double nextSteeringChange = 0.0;
 
   List<Offset> relativeVectorsForNearbyMobs;
+  Offset neighborsCentroid;
 
   @override
   void tick(World world) {
@@ -160,8 +162,14 @@ class Boid extends Mob {
       ((radians + pi) % (2 * pi) - pi);
 
   // TODO: This is current linear, quadratic might look better.
-  double steerIntensityForDistance(double distance) =>
-      (1 - distance / kBoidSenseRadius);
+  double avoidSteerIntensity(Offset colisionVector) {
+    // Steer harder the closer the object is
+    // and the more directly in-front it is.
+    double angle =
+        normalizeWithinPiToNegativePi(colisionVector.direction).abs();
+    return (1 - colisionVector.distance / kBoidSenseRadius) *
+        (1 - angle / kBoidSenseAngle);
+  }
 
   @override
   bool inSensingArea(Mob other) {
@@ -199,16 +207,18 @@ class Boid extends Mob {
     // Instead of looping and summing, we could just steer away from the closest?
     for (Offset relativeVector in relativeVectorsForNearbyMobs) {
       // Steer away from the angle of the relative vector.
-      double angleAdjust =
-          -relativeVector.direction.sign * kBoidMaxAvoidSteerSpeed;
-      // At speed relative to how close the mob is.
-      angleAdjust *= steerIntensityForDistance(relativeVector.distance);
+      // At speed relative to how close the mob is
+      // and how much in front of us it is.
+      double angleAdjust = -relativeVector.direction.sign *
+          kBoidMaxAvoidSteerSpeed *
+          avoidSteerIntensity(relativeVector);
       totalAdjustment += angleAdjust;
     }
     return totalAdjustment;
   }
 
-  double steerIntensityForAngle(double angleDiff) => (angleDiff / (0.1 * pi));
+  double alignSteerIntensityForAngle(double angleDiff) =>
+      (angleDiff / (0.1 * pi));
 
   double steerToAlign(World world) {
     double averageAngle = 0.0;
@@ -223,7 +233,26 @@ class Boid extends Mob {
     double angleDiff = averageAngle - normalizeWithinPiToNegativePi(radians);
     angleDiff = angleDiff.sign * min(angleDiff.abs(), kBoidMaxAlignAngle);
     // Apply a curved steering adjustment based on diff from average.
-    return steerIntensityForAngle(angleDiff) * kBoidMaxAvoidSteerSpeed;
+    return alignSteerIntensityForAngle(angleDiff) * kBoidMaxAvoidSteerSpeed;
+  }
+
+  Offset computeNeighborsCentroid(World world) {
+    double xSum = 0;
+    double ySum = 0;
+    int neighborCount = 0;
+    for (Mob mob in world.mobs) {
+      if (!inSensingArea(mob)) continue;
+      neighborCount += 1;
+      xSum += mob.position.dx;
+      ySum += mob.position.dy;
+    }
+    if (neighborCount == 0) return null;
+    return Offset(xSum / neighborCount, ySum / neighborCount);
+  }
+
+  double steerTowardsMiddle() {
+    // TODO: This should use the updated planned velocity vector?
+    return (velocityVector.direction - neighborsCentroid.direction) / 100;
   }
 
   @override
@@ -235,6 +264,10 @@ class Boid extends Mob {
     // Alignment
     if (kEnableAlignment) nextSteeringChange += steerToAlign(world);
     // Cohesion
+    if (kEnableCohesion) {
+      neighborsCentroid = computeNeighborsCentroid(world);
+      if (neighborsCentroid != null) nextSteeringChange += steerTowardsMiddle();
+    }
   }
 
   void paintSightArc(Canvas canvas) {
@@ -254,9 +287,9 @@ class Boid extends Mob {
   void paintDistanceLines(Canvas canvas) {
     for (Offset relativeVector in relativeVectorsForNearbyMobs) {
       Paint obstaclePaint = Paint()
-        ..color = Color.lerp(Colors.brown.withOpacity(.5), Colors.red,
-            steerIntensityForDistance(relativeVector.distance))
-        ..strokeWidth = 2.0
+        ..color = Color.lerp(Colors.brown.withOpacity(.3), Colors.red,
+            avoidSteerIntensity(relativeVector))
+        ..strokeWidth = 3.0
         ..style = PaintingStyle.stroke;
       canvas.drawLine(Offset.zero, relativeVector, obstaclePaint);
     }
@@ -270,8 +303,18 @@ class Boid extends Mob {
     canvas.drawLine(Offset.zero, Offset(velocity * 20, 0), selfPaint);
   }
 
+  void paintNeighborsCentroid(Canvas canvas) {
+    if (neighborsCentroid == null) return;
+    Paint middlePaint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(neighborsCentroid, 10.0, middlePaint);
+  }
+
   void paint(Canvas canvas, Size size) {
     canvas.save();
+    if (showSight && kEnableCohesion) paintNeighborsCentroid(canvas);
     canvas.translate(position.dx, position.dy);
     canvas.rotate(radians);
     if (showSight) {
