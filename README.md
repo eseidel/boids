@@ -10,5 +10,5 @@ Have not tried to build for iOS, Android, Web or Windows yet.
 
 
 Known issues
-* Steering behavior is wrong.
+* Alignment vectors are drawn for all boids.
 * No Alignment or Cohesion behavior yet.
